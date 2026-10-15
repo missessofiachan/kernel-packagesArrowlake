@@ -1,14 +1,16 @@
 name: Build (fedora)
 
 on:
+    push:
+        branches: [ main ]
+        tags:
+            - 'v*'
     workflow_dispatch:
         inputs:
             version:
-                description: 'Enter a tagged OGC kernel version in the format <kernel-version>-ogc<rev>'
-                required: true
-    push:
-        tags:
-            - 'v*'
+                description: 'Enter a tagged OGC kernel version in the format <kernel-version>-ogc<rev> (leave blank for latest)'
+                required: false
+                default: '7.2.9-ogc3'
 
 env:
     OCI_REPO: ghcr.io/${{ github.repository }}-fedora
@@ -74,6 +76,7 @@ jobs:
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
               with:
                   persist-credentials: false
+                  fetch-depth: 0
 
             - name: Get version
               id: version
@@ -81,8 +84,12 @@ jobs:
               run: |
                   if [ -n "${{ github.event.inputs.version }}" ]; then
                     OGC_VERSION="${{ github.event.inputs.version }}"
-                  else
+                  elif [[ "${{ github.ref_name }}" =~ ^v[0-9] ]]; then
                     TAG="${{ github.ref_name }}"
+                    OGC_VERSION="${TAG#v}"
+                  else
+                    TAG=$(git tag -l "v*.*-ogc*" --sort=-v:refname | head -n 1)
+                    TAG="${TAG:-v7.2.9-ogc3}"
                     OGC_VERSION="${TAG#v}"
                   fi
                   KERNEL_VERSION="${OGC_VERSION%-ogc*}"
@@ -359,16 +366,16 @@ jobs:
                   rpmbuild --define "_topdir $TOPDIR" -ba ./fedora/kernel.spec
 
             - name: Setup Cosign
-              if: startsWith(github.ref, 'refs/tags/') && steps.check-existing.outputs.exists != 'true'
+              if: steps.check-existing.outputs.exists != 'true'
               uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
 
             - name: Login to ghcr.io
-              if: startsWith(github.ref, 'refs/tags/') && steps.check-existing.outputs.exists != 'true'
+              if: steps.check-existing.outputs.exists != 'true'
               run: |
                   echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
             - name: Push OCI artifact
-              if: startsWith(github.ref, 'refs/tags/') && steps.check-existing.outputs.exists != 'true'
+              if: steps.check-existing.outputs.exists != 'true'
               id: push
               run: |
                   VERSION="${{ steps.version.outputs.ogc_version }}.${{ steps.buildnum.outputs.build_num }}"
@@ -390,7 +397,7 @@ jobs:
                   echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
             - name: Tag with content hash
-              if: startsWith(github.ref, 'refs/tags/') && steps.check-existing.outputs.exists != 'true'
+              if: steps.check-existing.outputs.exists != 'true'
               run: |
                   REPO="${{ env.OCI_REPO }}"
                   VERSION="${{ steps.version.outputs.ogc_version }}.${{ steps.buildnum.outputs.build_num }}"
@@ -398,7 +405,8 @@ jobs:
                     "sha-${{ steps.content-hash.outputs.hash }}-${{ matrix.target.id }}"
 
             - name: Sign artifacts
-              if: startsWith(github.ref, 'refs/tags/') && steps.check-existing.outputs.exists != 'true'
+              if: steps.check-existing.outputs.exists != 'true'
+              continue-on-error: true
               run: |
                   VERSION="${{ steps.version.outputs.ogc_version }}.${{ steps.buildnum.outputs.build_num }}"
                   REPO="${{ env.OCI_REPO }}"
@@ -409,7 +417,8 @@ jobs:
                   fi
 
             - name: Attest build provenance
-              if: startsWith(github.ref, 'refs/tags/') && steps.check-existing.outputs.exists != 'true'
+              if: steps.check-existing.outputs.exists != 'true'
+              continue-on-error: true
               uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
               with:
                   subject-name: ${{ env.OCI_REPO }}
@@ -417,7 +426,8 @@ jobs:
                   push-to-registry: true
 
             - name: Verify signature
-              if: startsWith(github.ref, 'refs/tags/') && steps.check-existing.outputs.exists != 'true'
+              if: steps.check-existing.outputs.exists != 'true'
+              continue-on-error: true
               run: |
                   VERSION="${{ steps.version.outputs.ogc_version }}.${{ steps.buildnum.outputs.build_num }}"
                   REPO="${{ env.OCI_REPO }}"

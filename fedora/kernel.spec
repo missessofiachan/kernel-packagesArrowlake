@@ -362,6 +362,11 @@ make olddefconfig
 cat .config > config-linux-ogc
 
 %build
+export KCFLAGS="-O3 -march=arrowlake-s -mtune=arrowlake-s -pipe"
+export KCPPFLAGS="-O3 -march=arrowlake-s -mtune=arrowlake-s -pipe"
+export HOSTCFLAGS="-O3 -march=arrowlake-s -mtune=arrowlake-s -pipe"
+export HOSTCXXFLAGS="-O3 -march=arrowlake-s -mtune=arrowlake-s -pipe"
+
 make %{?_smp_mflags} %{?llvm_build_env_vars} EXTRAVERSION=-%{krelstr}
 
 # non-kernel userspace packages -- disable LTO

@@ -315,6 +315,62 @@ jobs:
           cp linux-${TAR_KVER}/.config "$TOPDIR/SOURCES/config"
           rpmbuild --define "_topdir $TOPDIR" -ba ./fedora/kernel.spec
 
+      - name: Build matching NVIDIA and out-of-tree kernel modules
+        if: steps.check-existing.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euox pipefail
+          TOPDIR="$(pwd)/rpmbuild"
+
+          echo "Configuring RPM Fusion repositories for out-of-tree kmods..."
+          dnf install -y --nogpgcheck \
+            https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
+            https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm || \
+          dnf install -y --nogpgcheck \
+            https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-rawhide.noarch.rpm \
+            https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-rawhide.noarch.rpm
+
+          # Enable tainted repo for akmod-nvidia-open
+          dnf install -y rpmfusion-nonfree-release-tainted || true
+
+          echo "Installing freshly compiled kernel packages..."
+          dnf install -y \
+            "$TOPDIR"/RPMS/x86_64/kernel-core-*.rpm \
+            "$TOPDIR"/RPMS/x86_64/kernel-modules-*.rpm \
+            "$TOPDIR"/RPMS/x86_64/kernel-devel-*.rpm \
+            akmods kmodtool gcc make
+
+          # Detect kernel release string
+          KVER=$(rpm -qp --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" "$TOPDIR"/RPMS/x86_64/kernel-core-*.rpm | head -n 1)
+          echo "Building kernel modules for kernel release: ${KVER}"
+
+          # Install akmod-nvidia-open (preferred for Ada Lovelace / RTX 4080 Super) or fallback to akmod-nvidia
+          if dnf install -y akmod-nvidia-open; then
+            echo "Compiling open-source NVIDIA modules with akmods..."
+            akmods --force --kernels "${KVER}" --kmod nvidia-open || akmods --force --kernels "${KVER}" || true
+          elif dnf install -y akmod-nvidia; then
+            echo "Compiling standard NVIDIA modules with akmods..."
+            akmods --force --kernels "${KVER}" --kmod nvidia || akmods --force --kernels "${KVER}" || true
+          fi
+
+          # Also build optional out-of-tree drivers (xone for Xbox dongles, v4l2loopback for cameras)
+          for aux_kmod in akmod-xone akmod-v4l2loopback; do
+            if dnf install -y "${aux_kmod}"; then
+              echo "Compiling ${aux_kmod} for ${KVER}..."
+              akmods --force --kernels "${KVER}" || true
+            fi
+          done
+
+          # Copy all built kmod RPMs to the RPMS directory so ORAS packages them
+          mkdir -p "$TOPDIR"/RPMS/x86_64
+          if find /var/cache/akmods/ -name "kmod-*.rpm" | grep -q .; then
+            echo "Successfully generated kmod RPMs:"
+            find /var/cache/akmods/ -name "kmod-*.rpm" -exec cp -v {} "$TOPDIR"/RPMS/x86_64/ \;
+          else
+            echo "::warning::No kmod RPMs found in /var/cache/akmods/"
+          fi
+          ls -la "$TOPDIR"/RPMS/x86_64/
+
       - name: Setup Cosign
         if: steps.check-existing.outputs.exists != 'true'
         uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0

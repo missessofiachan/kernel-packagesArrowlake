@@ -322,16 +322,38 @@ jobs:
           set -euox pipefail
           TOPDIR="$(pwd)/rpmbuild"
 
-          echo "Configuring RPM Fusion repositories for out-of-tree kmods..."
+          echo "Configuring repositories for out-of-tree kmods..."
+          # 1. Negativo17 repo: provides matching akmod-nvidia (615.78.x) for Bazzite
+          cat << 'EOF' > /etc/yum.repos.d/negativo17-fedora-nvidia.repo
+[fedora-nvidia]
+name=negativo17 - Nvidia
+baseurl=https://negativo17.org/repos/nvidia/fedora-$releasever/$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://negativo17.org/repos/RPM-GPG-KEY-slaanesh
+repo_gpgcheck=0
+skip_if_unavailable=1
+priority=70
+EOF
+
+          # 2. Ublue-os akmods COPR: provides akmod-xone matching Bazzite
+          cat << 'EOF' > /etc/yum.repos.d/ublue-os-akmods.repo
+[copr:copr.fedorainfracloud.org:ublue-os:akmods]
+name=Copr repo for akmods owned by ublue-os
+baseurl=https://download.copr.fedorainfracloud.org/results/ublue-os/akmods/fedora-$releasever-$basearch/
+type=rpm-md
+skip_if_unavailable=True
+gpgcheck=1
+gpgkey=https://download.copr.fedorainfracloud.org/results/ublue-os/akmods/pubkey.gpg
+repo_gpgcheck=0
+enabled=1
+priority=85
+EOF
+
+          # 3. RPM Fusion free/nonfree repositories for auxiliary modules (v4l2loopback)
           dnf install -y --nogpgcheck \
             https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
-            https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm || \
-          dnf install -y --nogpgcheck \
-            https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-rawhide.noarch.rpm \
-            https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-rawhide.noarch.rpm
-
-          # Enable tainted repo for akmod-nvidia-open
-          dnf install -y rpmfusion-nonfree-release-tainted || true
+            https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm || true
 
           echo "Installing freshly compiled kernel packages..."
           dnf install -y \
@@ -344,22 +366,23 @@ jobs:
           KVER=$(rpm -qp --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" "$TOPDIR"/RPMS/x86_64/kernel-core-*.rpm | head -n 1)
           echo "Building kernel modules for kernel release: ${KVER}"
 
-          # Install akmod-nvidia-open (preferred for Ada Lovelace / RTX 4080 Super) or fallback to akmod-nvidia
-          if dnf install -y akmod-nvidia-open; then
-            echo "Compiling open-source NVIDIA modules with akmods..."
-            akmods --force --kernels "${KVER}" --kmod nvidia-open || akmods --force --kernels "${KVER}" || true
-          elif dnf install -y akmod-nvidia; then
-            echo "Compiling standard NVIDIA modules with akmods..."
-            akmods --force --kernels "${KVER}" --kmod nvidia || akmods --force --kernels "${KVER}" || true
-          fi
+          # Install akmod-nvidia from Negativo17 (matches Bazzite's 615.78.x driver and builds open modules for Ada Lovelace)
+          echo "Installing akmod-nvidia from Negativo17..."
+          dnf install -y --enablerepo=fedora-nvidia akmod-nvidia
+
+          echo "Compiling matching NVIDIA kernel modules with akmods..."
+          akmods --force --kernels "${KVER}" --kmod nvidia
 
           # Also build optional out-of-tree drivers (xone for Xbox dongles, v4l2loopback for cameras)
           for aux_kmod in akmod-xone akmod-v4l2loopback; do
             if dnf install -y "${aux_kmod}"; then
               echo "Compiling ${aux_kmod} for ${KVER}..."
-              akmods --force --kernels "${KVER}" || true
+              akmods --force --kernels "${KVER}" --kmod "${aux_kmod#akmod-}" || true
             fi
           done
+
+          # Clean out any old/conflicting akmods cache artifacts
+          rm -f /var/cache/akmods/*/kmod-nvidia-open-*.rpm 2>/dev/null || true
 
           # Copy all built kmod RPMs to the RPMS directory so ORAS packages them
           mkdir -p "$TOPDIR"/RPMS/x86_64
@@ -367,7 +390,8 @@ jobs:
             echo "Successfully generated kmod RPMs:"
             find /var/cache/akmods/ -name "kmod-*.rpm" -exec cp -v {} "$TOPDIR"/RPMS/x86_64/ \;
           else
-            echo "::warning::No kmod RPMs found in /var/cache/akmods/"
+            echo "::error::No kmod RPMs found in /var/cache/akmods/"
+            exit 1
           fi
           ls -la "$TOPDIR"/RPMS/x86_64/
 

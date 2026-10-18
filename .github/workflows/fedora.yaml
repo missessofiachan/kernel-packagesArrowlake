@@ -148,7 +148,7 @@ jobs:
           CACHE="${GITHUB_WORKSPACE}/pkgcache"
           mkdir -p "$CACHE"
           dnf -y install dnf5-plugins cpio
-          dnf download --destdir "$CACHE" --arch x86_64 --latest-limit=1 kernel-core
+          dnf download --destdir "$CACHE" kernel-core
           RPM=$(find "$CACHE" -maxdepth 1 -name 'kernel-core-*.rpm' -type f)
           if [ "$(printf '%s\n' "$RPM" | wc -l)" -ne 1 ] || [ -z "$RPM" ]; then
             echo "::error::Expected exactly one kernel-core package, found: ${RPM:-none}"
@@ -497,3 +497,4 @@ jobs:
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
             "${REPO}@${DIGEST}"
 
+            

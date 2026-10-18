@@ -50,9 +50,10 @@ jobs:
       - name: Prepare environment
         shell: bash
         run: |
-          echo "OCI_REPO=${OCI_REPO,,}" >> ${GITHUB_ENV}
+          echo "OCI_REPO=${OCI_REPO,,}" >> "${GITHUB_ENV}"
 
       - name: Maximize build space
+        shell: bash
         run: |
           df -h
           rm -rf /usr-host/share/dotnet
@@ -73,12 +74,15 @@ jobs:
       - name: Get version
         id: version
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            OGC_VERSION="${{ github.event.inputs.version }}"
-          elif [[ "${{ github.ref_name }}" =~ ^v[0-9] ]]; then
-            TAG="${{ github.ref_name }}"
-            OGC_VERSION="${TAG#v}"
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION}" ]; then
+            OGC_VERSION="${INPUT_VERSION}"
+          elif [[ "${REF_NAME}" =~ ^v[0-9] ]]; then
+            OGC_VERSION="${REF_NAME#v}"
           else
             OGC_VERSION="7.2.9-ogc3"
           fi
@@ -121,16 +125,18 @@ jobs:
           else
             STREAM_TAG="latest"
           fi
-          echo "ogc_version=$OGC_VERSION" >> "$GITHUB_OUTPUT"
-          echo "kernel_version=$KERNEL_VERSION" >> "$GITHUB_OUTPUT"
-          echo "major_version=$MAJOR_VERSION" >> "$GITHUB_OUTPUT"
-          echo "ogc_rev=$OGC_REV" >> "$GITHUB_OUTPUT"
-          echo "base_kver=$BASE_KVER" >> "$GITHUB_OUTPUT"
-          echo "stable_kver=$STABLE_KVER" >> "$GITHUB_OUTPUT"
-          echo "tar_kver=$TAR_KVER" >> "$GITHUB_OUTPUT"
-          echo "is_rc=$IS_RC" >> "$GITHUB_OUTPUT"
-          echo "rc_ver=$RC_VER" >> "$GITHUB_OUTPUT"
-          echo "stream_tag=$STREAM_TAG" >> "$GITHUB_OUTPUT"
+          {
+            echo "ogc_version=$OGC_VERSION"
+            echo "kernel_version=$KERNEL_VERSION"
+            echo "major_version=$MAJOR_VERSION"
+            echo "ogc_rev=$OGC_REV"
+            echo "base_kver=$BASE_KVER"
+            echo "stable_kver=$STABLE_KVER"
+            echo "tar_kver=$TAR_KVER"
+            echo "is_rc=$IS_RC"
+            echo "rc_ver=$RC_VER"
+            echo "stream_tag=$STREAM_TAG"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Setup ORAS
         uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
@@ -142,7 +148,7 @@ jobs:
           CACHE="${GITHUB_WORKSPACE}/pkgcache"
           mkdir -p "$CACHE"
           dnf -y install dnf5-plugins cpio
-          dnf download --destdir "$CACHE" kernel-core
+          dnf download --destdir "$CACHE" --arch x86_64 --latest-limit=1 kernel-core
           RPM=$(find "$CACHE" -maxdepth 1 -name 'kernel-core-*.rpm' -type f)
           if [ "$(printf '%s\n' "$RPM" | wc -l)" -ne 1 ] || [ -z "$RPM" ]; then
             echo "::error::Expected exactly one kernel-core package, found: ${RPM:-none}"
@@ -165,6 +171,7 @@ jobs:
         id: content-hash
         shell: bash
         run: |
+          set -euo pipefail
           HASH=$(
             {
               echo "ogc_version=${{ steps.version.outputs.ogc_version }}"
@@ -188,6 +195,7 @@ jobs:
         id: check-existing
         shell: bash
         run: |
+          set -euo pipefail
           REPO="${OCI_REPO,,}"
           TAG="sha-${{ steps.content-hash.outputs.hash }}-${{ matrix.target.id }}"
           if oras manifest fetch "${REPO}:${TAG}" > /dev/null 2>&1; then
@@ -203,6 +211,7 @@ jobs:
         id: buildnum
         shell: bash
         run: |
+          set -euo pipefail
           VERSION_PREFIX="${{ steps.version.outputs.ogc_version }}"
           REPO="${OCI_REPO,,}"
           EXISTING=$(oras repo tags "${REPO}" 2>/dev/null || true)
@@ -215,6 +224,7 @@ jobs:
         if: steps.check-existing.outputs.exists != 'true'
         shell: bash
         run: |
+          set -euo pipefail
           sed -i \
             -e "s/@@BASEKVER@@/${{ steps.version.outputs.base_kver }}/" \
             -e "s/@@STABLEKVER@@/${{ steps.version.outputs.stable_kver }}/" \
@@ -225,7 +235,9 @@ jobs:
 
       - name: Dependencies
         if: steps.check-existing.outputs.exists != 'true'
+        shell: bash
         run: |
+          set -euo pipefail
           dnf -y builddep fedora/kernel.spec
           dnf -y install git gnupg2 jq sed wget
 
@@ -233,6 +245,7 @@ jobs:
         if: steps.check-existing.outputs.exists != 'true'
         shell: bash
         run: |
+          set -euo pipefail
           dnf -y install cmake make gcc elfutils-devel zlib-devel
           wget https://fedorapeople.org/~acme/dwarves/dwarves-1.31.tar.xz
           echo "0a7f255ccacf8cc7f8cd119099eb327179b4b3c67cb015af646af6d0cb03054d  dwarves-1.31.tar.xz" | sha256sum -c
@@ -249,12 +262,13 @@ jobs:
         if: steps.check-existing.outputs.exists != 'true'
         shell: bash
         run: |
+          set -euo pipefail
           TAR_KVER="${{ steps.version.outputs.tar_kver }}"
           MAJOR_VERSION="${{ steps.version.outputs.major_version }}"
           OGC_VERSION="${{ steps.version.outputs.ogc_version }}"
           IS_RC="${{ steps.version.outputs.is_rc }}"
-          wget https://github.com/OpenGamingCollective/linux/releases/download/v${OGC_VERSION}/monolithic.patch
-          wget https://github.com/OpenGamingCollective/linux/releases/download/v${OGC_VERSION}/monolithic.patch.sig
+          wget "https://github.com/OpenGamingCollective/linux/releases/download/v${OGC_VERSION}/monolithic.patch"
+          wget "https://github.com/OpenGamingCollective/linux/releases/download/v${OGC_VERSION}/monolithic.patch.sig"
           KORG_KEYS="https://git.kernel.org/pub/scm/docs/kernel/pgpkeys.git/plain/keys"
           for KEY in ABAF11C65A2970B130ABE3C479BE3E4300411886:79BE3E4300411886 \
                      647F28654894E3BD457199BE38DBBDC86092693E:38DBBDC86092693E; do
@@ -263,24 +277,24 @@ jobs:
             gpg --import "${KEYID}.asc"
             gpg --list-keys "${KEY%:*}" > /dev/null
           done
-          gpg --import $GITHUB_WORKSPACE/public.key
+          gpg --import "$GITHUB_WORKSPACE/public.key"
           if [ "$IS_RC" = "true" ]; then
-            git clone --depth=1 --branch v${TAR_KVER} \
+            git clone --depth=1 --branch "v${TAR_KVER}" \
               https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git \
-              linux-${TAR_KVER}.git
-            git -C linux-${TAR_KVER}.git verify-tag v${TAR_KVER}
-            git -C linux-${TAR_KVER}.git archive --format=tar \
-              --prefix=linux-${TAR_KVER}/ v${TAR_KVER} \
-              | xz -T0 -0 > linux-${TAR_KVER}.tar.xz
-            rm -rf linux-${TAR_KVER}.git
+              "linux-${TAR_KVER}.git"
+            git -C "linux-${TAR_KVER}.git" verify-tag "v${TAR_KVER}"
+            git -C "linux-${TAR_KVER}.git" archive --format=tar \
+              --prefix="linux-${TAR_KVER}/" "v${TAR_KVER}" \
+              | xz -T0 -0 > "linux-${TAR_KVER}.tar.xz"
+            rm -rf "linux-${TAR_KVER}.git"
           else
-            wget https://cdn.kernel.org/pub/linux/kernel/v${MAJOR_VERSION}/linux-${TAR_KVER}.tar.xz
-            wget https://cdn.kernel.org/pub/linux/kernel/v${MAJOR_VERSION}/linux-${TAR_KVER}.tar.sign
-            xz -dc linux-${TAR_KVER}.tar.xz | gpg --verify linux-${TAR_KVER}.tar.sign -
+            wget "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR_VERSION}/linux-${TAR_KVER}.tar.xz"
+            wget "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR_VERSION}/linux-${TAR_KVER}.tar.sign"
+            xz -dc "linux-${TAR_KVER}.tar.xz" | gpg --verify "linux-${TAR_KVER}.tar.sign" -
           fi
           gpg --verify monolithic.patch.sig monolithic.patch
-          tar -xf linux-${TAR_KVER}.tar.xz
-          cd linux-${TAR_KVER}
+          tar -xf "linux-${TAR_KVER}.tar.xz"
+          cd "linux-${TAR_KVER}"
           patch -Np1 < ../monolithic.patch
 
       - name: Merge kernel configuration files
@@ -300,19 +314,22 @@ jobs:
         if: steps.check-existing.outputs.exists != 'true'
         shell: bash
         run: |
-          cd linux-${{ steps.version.outputs.tar_kver }}
+          set -euo pipefail
+          cd "linux-${{ steps.version.outputs.tar_kver }}"
           make olddefconfig
 
       - name: Build
         if: steps.check-existing.outputs.exists != 'true'
+        shell: bash
         run: |
+          set -euo pipefail
           TAR_KVER="${{ steps.version.outputs.tar_kver }}"
           TOPDIR="$(pwd)/rpmbuild"
           mkdir -p "$TOPDIR"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-          cp linux-${TAR_KVER}.tar.xz "$TOPDIR/SOURCES/"
+          cp "linux-${TAR_KVER}.tar.xz" "$TOPDIR/SOURCES/"
           cp monolithic.patch "$TOPDIR/SOURCES/"
           cp fedora/kvm_stat.logrotate "$TOPDIR/SOURCES/"
-          cp linux-${TAR_KVER}/.config "$TOPDIR/SOURCES/config"
+          cp "linux-${TAR_KVER}/.config" "$TOPDIR/SOURCES/config"
           rpmbuild --define "_topdir $TOPDIR" -ba ./fedora/kernel.spec
 
       - name: Build matching NVIDIA and out-of-tree kernel modules
@@ -323,55 +340,59 @@ jobs:
           TOPDIR="$(pwd)/rpmbuild"
 
           echo "Configuring repositories for out-of-tree kmods..."
-          # 1. Negativo17 repo: provides matching akmod-nvidia (615.78.x) for Bazzite
+          # 1. Negativo17 repo: provides matching akmod-nvidia for Bazzite
           cat << 'EOF' > /etc/yum.repos.d/negativo17-fedora-nvidia.repo
-[fedora-nvidia]
-name=negativo17 - Nvidia
-baseurl=https://negativo17.org/repos/nvidia/fedora-$releasever/$basearch/
-enabled=1
-gpgcheck=1
-gpgkey=https://negativo17.org/repos/RPM-GPG-KEY-slaanesh
-repo_gpgcheck=0
-skip_if_unavailable=1
-priority=70
-EOF
+          [fedora-nvidia]
+          name=negativo17 - Nvidia
+          baseurl=https://negativo17.org/repos/nvidia/fedora-$releasever/$basearch/
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://negativo17.org/repos/RPM-GPG-KEY-slaanesh
+          repo_gpgcheck=0
+          skip_if_unavailable=1
+          priority=70
+          EOF
 
           # 2. Ublue-os akmods COPR: provides akmod-xone matching Bazzite
           cat << 'EOF' > /etc/yum.repos.d/ublue-os-akmods.repo
-[copr:copr.fedorainfracloud.org:ublue-os:akmods]
-name=Copr repo for akmods owned by ublue-os
-baseurl=https://download.copr.fedorainfracloud.org/results/ublue-os/akmods/fedora-$releasever-$basearch/
-type=rpm-md
-skip_if_unavailable=True
-gpgcheck=1
-gpgkey=https://download.copr.fedorainfracloud.org/results/ublue-os/akmods/pubkey.gpg
-repo_gpgcheck=0
-enabled=1
-priority=85
-EOF
+          [copr:copr.fedorainfracloud.org:ublue-os:akmods]
+          name=Copr repo for akmods owned by ublue-os
+          baseurl=https://download.copr.fedorainfracloud.org/results/ublue-os/akmods/fedora-$releasever-$basearch/
+          type=rpm-md
+          skip_if_unavailable=True
+          gpgcheck=1
+          gpgkey=https://download.copr.fedorainfracloud.org/results/ublue-os/akmods/pubkey.gpg
+          repo_gpgcheck=0
+          enabled=1
+          priority=85
+          EOF
 
-          # 3. RPM Fusion free/nonfree repositories for auxiliary modules (v4l2loopback)
+          # 3. RPM Fusion free repository for auxiliary modules (v4l2loopback)
           dnf install -y --nogpgcheck \
-            https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
-            https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm || true
+            "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" || true
 
           echo "Installing freshly compiled kernel packages..."
-          dnf install -y \
-            "$TOPDIR"/RPMS/x86_64/kernel-core-*.rpm \
-            "$TOPDIR"/RPMS/x86_64/kernel-modules-*.rpm \
-            "$TOPDIR"/RPMS/x86_64/kernel-devel-*.rpm \
-            akmods kmodtool gcc make
+          mapfile -t KERNEL_RPMS < <(
+            find "$TOPDIR/RPMS/x86_64" -maxdepth 1 -type f \
+              \( -name "kernel-core-*.rpm" -o -name "kernel-modules*.rpm" -o -name "kernel-devel-*.rpm" \) \
+              ! -name "*debuginfo*" ! -name "*debugsource*"
+          )
+          dnf install -y "${KERNEL_RPMS[@]}" akmods kmodtool gcc make
 
-          # Detect kernel release string
-          KVER=$(rpm -qp --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" "$TOPDIR"/RPMS/x86_64/kernel-core-*.rpm | head -n 1)
+          # Detect kernel release string from kernel-core (excluding debuginfo)
+          KCORE_RPM=$(find "$TOPDIR/RPMS/x86_64" -maxdepth 1 -type f -name "kernel-core-*.rpm" ! -name "*debuginfo*" | head -n 1)
+          KVER=$(rpm -qp --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" "$KCORE_RPM")
           echo "Building kernel modules for kernel release: ${KVER}"
 
-          # Install akmod-nvidia from Negativo17 (matches Bazzite's 615.78.x driver and builds open modules for Ada Lovelace)
+          # Install akmod-nvidia from Negativo17
           echo "Installing akmod-nvidia from Negativo17..."
           dnf install -y --enablerepo=fedora-nvidia akmod-nvidia
 
           echo "Compiling matching NVIDIA kernel modules with akmods..."
-          akmods --force --kernels "${KVER}" --kmod nvidia
+          if ! akmods --force --kernels "${KVER}" --kmod nvidia; then
+            cat /var/cache/akmods/nvidia/*.log || true
+            exit 1
+          fi
 
           # Also build optional out-of-tree drivers (xone for Xbox dongles, v4l2loopback for cameras)
           for aux_kmod in akmod-xone akmod-v4l2loopback; do
@@ -384,16 +405,21 @@ EOF
           # Clean out any old/conflicting akmods cache artifacts
           rm -f /var/cache/akmods/*/kmod-nvidia-open-*.rpm 2>/dev/null || true
 
-          # Copy all built kmod RPMs to the RPMS directory so ORAS packages them
-          mkdir -p "$TOPDIR"/RPMS/x86_64
-          if find /var/cache/akmods/ -name "kmod-*.rpm" | grep -q .; then
+          # Copy built binary kmod RPMs (excluding SRPMs and debuginfo) to RPMS directory
+          mkdir -p "$TOPDIR/RPMS/x86_64"
+          mapfile -t BUILT_KMODS < <(
+            find /var/cache/akmods/ -type f -name "kmod-*.rpm" \
+              ! -name "*.src.rpm" ! -name "*debuginfo*" ! -name "*debugsource*"
+          )
+          if [ "${#BUILT_KMODS[@]}" -gt 0 ]; then
             echo "Successfully generated kmod RPMs:"
-            find /var/cache/akmods/ -name "kmod-*.rpm" -exec cp -v {} "$TOPDIR"/RPMS/x86_64/ \;
+            cp -v "${BUILT_KMODS[@]}" "$TOPDIR/RPMS/x86_64/"
           else
             echo "::error::No kmod RPMs found in /var/cache/akmods/"
+            cat /var/cache/akmods/*/*.log || true
             exit 1
           fi
-          ls -la "$TOPDIR"/RPMS/x86_64/
+          ls -la "$TOPDIR/RPMS/x86_64/"
 
       - name: Setup Cosign
         if: steps.check-existing.outputs.exists != 'true'
@@ -401,13 +427,16 @@ EOF
 
       - name: Login to ghcr.io
         if: steps.check-existing.outputs.exists != 'true'
+        shell: bash
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Push OCI artifact
         if: steps.check-existing.outputs.exists != 'true'
         id: push
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.ogc_version }}.${{ steps.buildnum.outputs.build_num }}"
           REPO="${{ env.OCI_REPO }}"
           TOPDIR="$(pwd)/rpmbuild"
@@ -416,9 +445,9 @@ EOF
           cp "$TOPDIR"/RPMS/noarch/*.rpm /tmp/rpms/ 2>/dev/null || true
           cd /tmp/rpms
           DIGEST=$(oras push --format json "${REPO}:${VERSION}-${{ matrix.target.id }}" ./*.rpm | jq -r '.digest')
-          if [ -z "$DIGEST" ]; then
-              echo "::error::Failed to capture digest from oras push"
-              exit 1
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
+            echo "::error::Failed to capture digest from oras push"
+            exit 1
           fi
           STREAM_TAG="${{ steps.version.outputs.stream_tag }}"
           if [ -n "$STREAM_TAG" ]; then
@@ -428,7 +457,9 @@ EOF
 
       - name: Tag with content hash
         if: steps.check-existing.outputs.exists != 'true'
+        shell: bash
         run: |
+          set -euo pipefail
           REPO="${{ env.OCI_REPO }}"
           VERSION="${{ steps.version.outputs.ogc_version }}.${{ steps.buildnum.outputs.build_num }}"
           oras tag "${REPO}:${VERSION}-${{ matrix.target.id }}" \
@@ -437,14 +468,12 @@ EOF
       - name: Sign artifacts
         if: steps.check-existing.outputs.exists != 'true'
         continue-on-error: true
+        shell: bash
         run: |
-          VERSION="${{ steps.version.outputs.ogc_version }}.${{ steps.buildnum.outputs.build_num }}"
+          set -euo pipefail
           REPO="${{ env.OCI_REPO }}"
-          STREAM_TAG="${{ steps.version.outputs.stream_tag }}"
-          cosign sign --yes "${REPO}:${VERSION}-${{ matrix.target.id }}"
-          if [ -n "$STREAM_TAG" ]; then
-            cosign sign --yes "${REPO}:${STREAM_TAG}-${{ matrix.target.id }}"
-          fi
+          DIGEST="${{ steps.push.outputs.digest }}"
+          cosign sign --yes "${REPO}@${DIGEST}"
 
       - name: Attest build provenance
         if: steps.check-existing.outputs.exists != 'true'
@@ -458,10 +487,13 @@ EOF
       - name: Verify signature
         if: steps.check-existing.outputs.exists != 'true'
         continue-on-error: true
+        shell: bash
         run: |
-          VERSION="${{ steps.version.outputs.ogc_version }}.${{ steps.buildnum.outputs.build_num }}"
+          set -euo pipefail
           REPO="${{ env.OCI_REPO }}"
+          DIGEST="${{ steps.push.outputs.digest }}"
           cosign verify \
             --certificate-identity-regexp=".*" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            "${REPO}:${VERSION}-${{ matrix.target.id }}"
+            "${REPO}@${DIGEST}"
+

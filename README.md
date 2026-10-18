@@ -48,7 +48,7 @@ This unlocks hardware instruction sets natively supported by Arrow Lake-S (Lion 
 - **ZRAM Compression:** `CONFIG_ZRAM=m`, `CONFIG_ZSMALLOC=y`, `CONFIG_CRYPTO_ZSTD=y`.
 
 #### 🟢 NVIDIA GeForce RTX 4080 Super Integration
-- **Nouveau Disabled:** `CONFIG_DRM_NOUVEAU=n` prevents driver collision with `akmod-nvidia-open`.
+- **Nouveau Disabled:** `CONFIG_DRM_NOUVEAU=n` prevents driver collision with NVIDIA kernel drivers (`akmod-nvidia`).
 - **HMM & Memory Sharing:** `CONFIG_ZONE_DEVICE=y`, `CONFIG_HMM_MIRROR=y`, `CONFIG_DMABUF_HEAPS=y`, `CONFIG_DMABUF_HEAPS_SYSTEM=y`, `CONFIG_SYNC_FILE=y`.
 - **Boot Splash:** `CONFIG_SYSFB_SIMPLEFB=y`, `CONFIG_DRM_SIMPLEDRM=y` for seamless Wayland handover.
 
@@ -101,11 +101,9 @@ RUN /ctx/build_files/build.sh
 During `build.sh`:
 1. Stock Fedora kernel packages are removed.
 2. Custom Arrow Lake-S kernel RPMs from `/tmp/ogc-rpms` are installed.
-3. NVIDIA Open kernel modules (`akmod-nvidia-open`) are recompiled specifically against the new kernel headers:
-   ```bash
-   KVER=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel-core | head -n 1)
-   akmods --force --kernels "${KVER}" --kmod nvidia
-   ```
+3. Pre-compiled matching NVIDIA kernel modules (`kmod-nvidia` from Negativo17 615.x) and auxiliary kmods (`xone`, `v4l2loopback`) are installed directly with self-healing fallback:
+   - If the prebuilt kmod matches Bazzite's `nvidia-driver`, it installs in seconds.
+   - If mismatched, `build.sh` automatically compiles the matching driver in-place with `akmods`.
 4. Dracut rebuilds a bootc-compatible reproducible initramfs.
 
 ---
